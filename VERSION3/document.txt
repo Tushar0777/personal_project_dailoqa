@@ -1,0 +1,256 @@
+# Playbook Version Management - Detailed Documentation
+
+## Overview
+This document provides an in-depth explanation of the newly added methods and endpoints for managing playbook versions in the application. The application is built using FastAPI with DynamoDB as the database, handling playbook versions with features like soft/hard delete, update, rollback, and optional cleanup.
+
+## Added Methods in playbook_version_service.py
+
+### 1. soft_delete_version(playbook_id: str, version: int)
+**Why added:**  
+To provide a non-destructive way to "delete" a version without permanently removing data from the database. This is useful for compliance, auditing, or allowing recovery of accidentally deleted versions. Soft deletes are common in production systems to maintain data integrity.
+
+**What it does:**  
+- Marks the version as deleted by setting `is_deleted = True` and `deleted_at` to the current UTC timestamp.
+- The item remains in DynamoDB but is filtered out from `list_versions` queries.
+- Uses DynamoDB's `update_item` with `UpdateExpression` to modify only the necessary attributes.
+- Returns consumed write capacity units (WCU) for monitoring.
+
+**Application flow:**  
+1. User calls the API endpoint (DELETE /versions/{playbook_id}/{version}/soft).  
+2. API validates permissions (requires "DELETE_VERSION").  
+3. Service method updates the item in DynamoDB.  
+4. Response indicates success; the version is now hidden from lists but recoverable.  
+5. If needed, an admin can query directly or modify the item to undelete.
+
+### 2. hard_delete_version(playbook_id: str, version: int)
+**Why added:**  
+To provide a permanent deletion option for versions that are no longer needed, freeing up storage and ensuring data is completely removed. This complements soft delete for cases where recovery isn't required.
+
+**What it does:**  
+- Completely removes the item from DynamoDB using `delete_item`.  
+- No recovery possible after this operation.  
+- Returns consumed write capacity units (WCU).  
+- If the item doesn't exist, DynamoDB handles it gracefully (no error thrown).
+
+**Application flow:**  
+1. User calls the API endpoint (DELETE /versions/{playbook_id}/{version}).  
+2. API validates permissions (requires "DELETE_VERSION").  
+3. Service method deletes the item from DynamoDB.  
+4. Response confirms deletion; the version is gone permanently.  
+5. Subsequent queries for that version will return no results.
+
+### 3. update_version(playbook_id: str, version: int, new_content: str)
+**Why added:**  
+To allow editing of existing version content without creating a new version number. This supports iterative improvements or corrections to playbook content. Includes rollback capability by preserving the previous state.
+
+**What it does:**  
+- Retrieves the current item to capture the existing `content`.  
+- Updates the item with new content, stores the old content in `previous_content`, and sets `updated_at` timestamp.  
+- If the version doesn't exist, returns "VERSION_NOT_FOUND".  
+- Uses `update_item` to atomically update multiple attributes.
+
+**Application flow:**  
+1. User calls the API endpoint (PUT /versions/{playbook_id}/{version}) with new content.  
+2. API validates permissions (requires "EDIT_VERSION").  
+3. Service fetches current item, saves old content, and updates with new data.  
+4. Response indicates update success; old content is now in `previous_content` for potential rollback.
+
+### 4. rollback_version(playbook_id: str, version: int)
+**Why added:**  
+To provide a safety net during updates. If a user updates content and later realizes they need the previous version, they can rollback without losing data. This prevents data loss from bad edits.
+
+**What it does:**  
+- Checks if `previous_content` exists; if not, returns "NO_PREVIOUS_CONTENT".  
+- Swaps `content` with `previous_content` (so the rolled-back content becomes the new "previous" for future rollbacks).  
+- Sets `rolled_back_at` timestamp.  
+- If version not found, returns "VERSION_NOT_FOUND".
+
+**Application flow:**  
+1. User calls the API endpoint (PUT /versions/{playbook_id}/{version}/rollback).  
+2. API validates permissions (requires "EDIT_VERSION").  
+3. Service checks for previous content and performs the swap.  
+4. Response confirms rollback; the version now has the old content restored.
+
+### 5. clear_previous_content (Commented Out)
+**Why added:**  
+To optionally clean up the `previous_content` attribute after rollback or manually, reducing item size in DynamoDB and storage costs. Prevents indefinite retention of old data.
+
+**What it does:**  
+- Uses `REMOVE` in `UpdateExpression` to delete the `previous_content` attribute.  
+- Returns success status and WCU.  
+- Safe to call even if the attribute doesn't exist.
+
+**Application flow:**  
+1. Uncomment the method and endpoint.  
+2. User calls DELETE /versions/{playbook_id}/{version}/previous-content.  
+3. API validates permissions.  
+4. Service removes the attribute.  
+5. Item size decreases; no further rollbacks possible for that version.
+
+## Added Endpoints in version_api.py
+
+### 1. DELETE /{playbook_id}/{version}/soft
+- Maps to `soft_delete_version`.  
+- Requires "DELETE_VERSION" permission.  
+- Accessible only to users with editor/admin roles (assuming roles are configured accordingly).
+
+### 2. DELETE /{playbook_id}/{version}
+- Maps to `hard_delete_version`.  
+- Requires "DELETE_VERSION" permission.  
+- Permanent deletion endpoint.
+
+### 3. PUT /{playbook_id}/{version}
+- Maps to `update_version`.  
+- Requires "EDIT_VERSION" permission.  
+- Body: JSON with "content" field.
+
+### 4. PUT /{playbook_id}/{version}/rollback
+- Maps to `rollback_version`.  
+- Requires "EDIT_VERSION" permission.  
+- No body needed.
+
+### 5. DELETE /{playbook_id}/{version}/previous-content (Commented Out)
+- Maps to `clear_previous_content`.  
+- Requires "EDIT_VERSION" permission.  
+- For manual cleanup.
+
+## Overall Application Flow
+1. **Authentication & Authorization:** All endpoints require JWT tokens and check permissions via `require_permission`. Roles are fetched from DynamoDB and matched against required permissions.
+2. **Service Layer:** Handles business logic, DynamoDB operations, and error handling. Returns structured responses with status and capacity metrics.
+3. **API Layer:** FastAPI routes handle HTTP requests, dependency injection for services, and permission checks.
+4. **Database:** DynamoDB stores items with composite keys (primary_id: PLAYBOOK#{id}, secondary_id: VERSION#{num}). Queries use KeyConditionExpression for efficiency.
+5. **Error Handling:** Methods return specific status codes (e.g., VERSION_NOT_FOUND) for client-side handling.
+6. **Monitoring:** All operations return RCU/WCU for performance tracking.
+
+## Permissions & Security
+- "DELETE_VERSION": Required for delete operations; assumed to be granted to editor/admin roles.
+- "EDIT_VERSION": Required for update/rollback; for content modification.
+- Permissions are checked per role in DynamoDB; unauthorized access raises 403 Forbidden.
+
+## Best Practices & Considerations
+- Soft delete filters in `list_versions` ensure deleted items aren't shown.
+- `previous_content` enables one-level rollback; multiple rollbacks would require versioning.
+- DynamoDB costs: Updates consume WCU; large content may increase costs.
+- Testing: Validate with unit tests for each method, especially edge cases like missing items.
+- Backup: For critical data, consider DynamoDB backups before hard deletes.
+
+This implementation provides flexible version management with safety features like rollback and soft delete.
+
+## In-Depth Explanation of Python and OOP Concepts Used
+
+### 1. Object-Oriented Programming (OOP) Concepts
+
+#### Classes and Objects
+- **What it is:** Classes are blueprints for creating objects. In the code, `PlaybookVersionService` is a class that encapsulates data and behavior related to playbook versions. Objects are instances of classes (e.g., when `PlaybookVersionService()` is called in the API).
+- **Usage in code:** `class PlaybookVersionService(BaseService):` defines a class inheriting from `BaseService`. Methods like `list_versions` are defined inside the class.
+- **Advantages:** 
+  - Encapsulation: Groups related functionality together, making code organized and maintainable.
+  - Reusability: The class can be instantiated multiple times without duplicating code.
+  - Modularity: Changes to the service logic are isolated to this class.
+
+#### Inheritance
+- **What it is:** A class can inherit properties and methods from a parent class. `PlaybookVersionService` inherits from `BaseService`, gaining access to shared methods like `_extract_capacity`.
+- **Usage in code:** `class PlaybookVersionService(BaseService):` – `BaseService` likely provides common DynamoDB utilities.
+- **Advantages:**
+  - Code Reuse: Avoids rewriting common code (e.g., capacity extraction).
+  - Hierarchy: Creates a logical structure; child classes can override or extend parent methods.
+  - Polymorphism: Allows treating subclasses as the parent type for flexibility.
+
+#### Methods and Instance Methods
+- **What it is:** Functions defined inside a class. Instance methods (like `self.list_versions`) operate on instance data.
+- **Usage in code:** All methods in `PlaybookVersionService` are instance methods, taking `self` as the first parameter to access the instance (e.g., `self.table`).
+- **Advantages:**
+  - Encapsulation: Methods operate on the object's state.
+  - Organization: Groups related operations (e.g., all version CRUD in one class).
+
+#### Encapsulation
+- **What it is:** Hiding internal details and exposing only necessary interfaces. Private methods (prefixed with `_`) like `_extract_capacity` are not meant for external use.
+- **Usage in code:** `_extract_capacity` is a helper method not exposed in the API.
+- **Advantages:**
+  - Security: Prevents accidental misuse of internal logic.
+  - Maintainability: Internal changes don't affect external code.
+
+### 2. Dependency Injection (DI)
+- **What it is:** A design pattern where dependencies (e.g., services) are provided to a class rather than the class creating them. In FastAPI, `Depends()` injects dependencies.
+- **Usage in code:** `service: PlaybookVersionService = Depends(get_version_service)` – The `get_version_service` function provides the service instance.
+- **Advantages:**
+  - Decoupling: Classes don't hardcode dependencies, making them testable (e.g., mock services in tests).
+  - Flexibility: Easy to swap implementations (e.g., change to a different service class).
+  - Inversion of Control: The framework manages object creation, reducing boilerplate.
+  - Testability: Inject mock objects for unit testing without real database calls.
+
+### 3. Factory Pattern
+- **What it is:** A creational pattern where a factory function/method creates objects. `get_version_service()` is a simple factory that instantiates `PlaybookVersionService`.
+- **Usage in code:** `def get_version_service() -> PlaybookVersionService: return PlaybookVersionService()` – Centralizes object creation.
+- **Advantages:**
+  - Centralized Creation: All instances come from one place, easy to modify (e.g., add logging or configuration).
+  - Abstraction: Hides the instantiation logic; callers don't need to know the class details.
+  - Extensibility: Can return different subclasses based on conditions (e.g., environment-specific services).
+  - Singleton-like Behavior: If modified, can ensure only one instance (though not here).
+
+### 4. Type Hints and Annotations
+- **What it is:** Python 3.5+ feature to specify expected types for variables, parameters, and returns (e.g., `playbook_id: str`).
+- **Usage in code:** All method parameters and returns use type hints (e.g., `def list_versions(self, playbook_id: str)`).
+- **Advantages:**
+  - Readability: Makes code self-documenting; IDEs provide better autocomplete and error detection.
+  - Debugging: Catches type-related bugs early (with tools like mypy).
+  - Maintainability: Easier for teams to understand and modify code.
+
+### 5. Decorators
+- **What it is:** Functions that modify other functions. In Python, `@` syntax applies decorators.
+- **Usage in code:** `@router.get`, `@router.post`, etc., are FastAPI decorators that register routes.
+- **Advantages:**
+  - Separation of Concerns: Route logic is separate from function definition.
+  - Reusability: Same decorator can be applied to multiple functions.
+  - Metaprogramming: Allows dynamic behavior (e.g., adding authentication checks).
+
+### 6. Exception Handling
+- **What it is:** Using try-except blocks to handle errors gracefully.
+- **Usage in code:** In `deps.py`, `HTTPException` is raised for unauthorized access.
+- **Advantages:**
+  - Robustness: Prevents crashes; provides meaningful error messages.
+  - User Experience: Clients get proper HTTP status codes (e.g., 403 Forbidden).
+  - Debugging: Centralized error handling makes issues easier to trace.
+
+### 7. Modules and Imports
+- **What it is:** Python's way to organize code into files/modules. Imports bring in external code.
+- **Usage in code:** `from ..services.playbook_version_service import PlaybookVersionService` – Relative imports for project structure.
+- **Advantages:**
+  - Organization: Large codebases are split into manageable files.
+  - Reusability: Modules can be imported across the project.
+  - Namespace Management: Avoids name conflicts.
+
+### 8. FastAPI-Specific Concepts
+#### Routers
+- **What it is:** Modular way to organize endpoints. `APIRouter` groups related routes.
+- **Usage in code:** `router = APIRouter(prefix="/versions", tags=["Versions"])` – All version endpoints are under `/versions`.
+- **Advantages:**
+  - Modularity: Routes are grouped logically (e.g., all version ops together).
+  - Reusability: Routers can be included in main app or other routers.
+  - Maintainability: Easier to manage large APIs.
+
+#### Path Parameters and Request Bodies
+- **What it is:** URL variables (e.g., `{playbook_id}`) and JSON bodies for data.
+- **Usage in code:** `@router.put("/{playbook_id}/{version}")` uses path params; `content: str` is from request body.
+- **Advantages:**
+  - RESTful Design: Clean, predictable URLs.
+  - Type Safety: FastAPI auto-validates and parses data.
+
+### 9. DynamoDB and boto3 Concepts
+#### KeyConditionExpression and FilterExpression
+- **What it is:** DynamoDB query conditions. `KeyConditionExpression` for partition/sort keys; `FilterExpression` for post-query filtering.
+- **Usage in code:** `KeyConditionExpression=Key("primary_id").eq(...)` for efficient queries; `FilterExpression=Attr("is_deleted").ne(True)` to exclude soft-deleted items.
+- **Advantages:**
+  - Performance: Key conditions use indexes; filters are applied after.
+  - Flexibility: Allows complex queries without scanning all data.
+  - Cost Efficiency: Reduces RCU consumption by targeting specific items.
+
+### Overall Advantages of These Patterns in This Application
+- **Scalability:** DI and factories make it easy to add features (e.g., caching) without changing core logic.
+- **Testability:** DI allows mocking services; OOP encapsulation isolates testable units.
+- **Maintainability:** Clear structure (classes, modules) and type hints reduce bugs.
+- **Performance:** Efficient DynamoDB queries and FastAPI's async capabilities (if used) handle high loads.
+- **Security:** Permission checks and exception handling prevent unauthorized access.
+- **Developer Experience:** FastAPI's auto-docs, type hints, and decorators speed up development.
+
+This architecture follows modern Python best practices, making the codebase robust, extensible, and easy to understand.
