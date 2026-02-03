@@ -1,0 +1,9 @@
+pydantic 
+streamlit 
+datetime 
+fastapi
+uvicorn
+boto3
+pytest
+moto
+python-dotenv
