@@ -1,0 +1,23 @@
+from fastapi import FastAPI
+from app.api import auth_api,playbook_api,version_api
+
+def create_app() -> FastAPI:
+    app = FastAPI(
+        title="Playbook Platform",
+        version="1.0.0",
+        description="Role-based Playbook Management System"
+    )
+
+    app.include_router(auth_api.router, prefix="/auth", tags=["Auth"])
+    app.include_router(playbook_api.router, prefix="/playbooks", tags=["Playbooks"])
+    app.include_router(version_api.router, prefix="/versions", tags=["Versions"])
+
+    # ---- Health Check ----
+    @app.get("/")
+    def health():
+        return {"status": "ok"}
+
+    return app
+
+
+app = create_app()
