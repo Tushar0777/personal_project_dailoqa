@@ -15,3 +15,13 @@ class RoleService(BaseService):
             "permissions":response.get("Item",{}).get("permissions",[]),
             "rcu":self._extract_capacity(response)
         }
+
+
+# list of all the permissions
+# VIEW_PLAYBOOK
+# VIEW_PLAYBOOK_CONTENT
+# CREATE_PLAYBOOK
+# CREATE_VERSION
+# EDIT_VERSION
+# DELETE_PLAYBOOK
+# ASSIGN_ROLE

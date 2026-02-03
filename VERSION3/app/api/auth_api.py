@@ -1,6 +1,8 @@
 from fastapi import APIRouter,HTTPException,status
-from app.auth.jwt_utils import JWTService
-from app.services.user_service import UserService
+# from app.auth.jwt_utils import JWTService
+from ..auth.jwt_utils import JWTService
+# from app.services.user_service import UserService
+from ..services.user_service import UserService
 
 
 router=APIRouter(prefix="/auth",tags=["Auth"])

@@ -1,8 +1,11 @@
 from fastapi import Depends,HTTPException,status
 from fastapi.security import OAuth2PasswordBearer
-from app.auth.jwt_utils import JWTService
-from app.services.user_service import UserService
-from app.services.role_service import RoleService
+# from app.auth.jwt_utils import JWTService
+from ..auth.jwt_utils import JWTService
+# from app.services.user_service import UserService
+from ..services.user_service import UserService
+# from app.services.role_service import RoleService
+from ..services.role_service import RoleService
 
 
 oauth2_scheme=OAuth2PasswordBearer(tokenUrl="/auth/login")
@@ -32,7 +35,7 @@ def get_current_user_role(user_id:str=Depends(get_current_user_id),
     roles=result["roles"]
 
     if not roles:
-        HTTPException(status_code=status.HTTP_403_FORBIDDEN,detail="no role assigned")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,detail="no role assigned")
 
     return roles
 
@@ -50,24 +53,24 @@ def require_permission(permission:str):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,detail=f"missing permissions {permission}")
         
 
-        return checker
+    return checker
     
 
-# dummy function for now
-def get_current_user():
-    # Replace with your auth logic later (JWT/OAuth)
-    return {"username": "dummy_user", "permissions": ["VIEW_PLAYBOOK", "ADD_PLAYBOOK"]}
+# # dummy function for now
+# def get_current_user():
+#     # Replace with your auth logic later (JWT/OAuth)
+#     return {"username": "dummy_user", "permissions": ["VIEW_PLAYBOOK", "ADD_PLAYBOOK"]}
 
-def require_permission(permission_name: str):
-    def dependency(user=Depends(get_current_user)):
-        # user.permissions should be a list of permissions
-        if permission_name not in user.get("permissions", []):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"You don't have permission: {permission_name}"
-            )
-        return True
-    return dependency
+# def require_permission(permission_name: str):
+#     def dependency(user=Depends(get_current_user)):
+#         # user.permissions should be a list of permissions
+#         if permission_name not in user.get("permissions", []):
+#             raise HTTPException(
+#                 status_code=status.HTTP_403_FORBIDDEN,
+#                 detail=f"You don't have permission: {permission_name}"
+#             )
+#         return True
+#     return dependency
 
         
 

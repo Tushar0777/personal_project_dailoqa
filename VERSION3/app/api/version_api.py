@@ -1,6 +1,8 @@
 from fastapi import APIRouter,Depends
-from app.api.deps import require_permission
-from app.services.playbook_version_service import PlaybookVersionService
+# from app.api.deps import require_permission
+from .deps import require_permission
+# from app.services.playbook_version_service import PlaybookVersionService
+from ..services.playbook_version_service import PlaybookVersionService
 
 router=APIRouter(prefix="/versions",tags=["Versions"])
 

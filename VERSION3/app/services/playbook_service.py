@@ -8,7 +8,6 @@ class PlaybookService(BaseService):
             FilterExpression=Attr("primary_id").begins_with("PLAYBOOK#"),
             ReturnConsumedCapacity="TOTAL"
         )
-
         return{
             "playbooks":response.get("Items",[]),
             "rcu":self._extract_capacity(response)
@@ -35,3 +34,13 @@ class PlaybookService(BaseService):
             "status":"created",
             "wcu":self._extract_capacity(response)
         }
+    
+    def delete_playbook(self, playbook_id: str):
+        return self.table.update_item(
+            Key={
+                "primary_id": f"PLAYBOOK#{playbook_id}",
+                "secondary_id": "METADATA"
+            },
+            UpdateExpression="SET is_deleted = :d",
+            ExpressionAttributeValues={":d": True}
+        )

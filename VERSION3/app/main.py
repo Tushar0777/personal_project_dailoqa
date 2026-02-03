@@ -1,5 +1,6 @@
 from fastapi import FastAPI
-from app.api import auth_api,playbook_api,version_api
+# from app.api import auth_api,playbook_api,version_api
+from .api import auth_api,playbook_api,version_api,user_api
 
 def create_app() -> FastAPI:
     app = FastAPI(
@@ -11,8 +12,9 @@ def create_app() -> FastAPI:
     app.include_router(auth_api.router, prefix="/auth", tags=["Auth"])
     app.include_router(playbook_api.router, prefix="/playbooks", tags=["Playbooks"])
     app.include_router(version_api.router, prefix="/versions", tags=["Versions"])
+    app.include_router(user_api.router,prefix="/users",tags=["users"])
 
-    # ---- Health Check ----
+
     @app.get("/")
     def health():
         return {"status": "ok"}
