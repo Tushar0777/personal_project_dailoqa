@@ -19,17 +19,25 @@ def get_role_service():
 # ---------- ROLE PERMISSIONS ----------
 
 @router.get("/{role_name}", dependencies=[Depends(require_permission("VIEW_ROLE"))])
-def list_permissions(role_name: str, service: PermissionService = Depends(get_permission_service)):
+def list_permissions(
+    role_name: str, 
+    service: PermissionService = Depends(get_permission_service)):
     return service.list_permissions(role_name)
 
 
 @router.post("/{role_name}", dependencies=[Depends(require_permission("EDIT_ROLE"))])
-def add_permission(role_name: str, permission: str, service: PermissionService = Depends(get_permission_service)):
+def add_permission(
+    role_name: str, 
+    permission: str, 
+    service: PermissionService = Depends(get_permission_service)):
     return service.add_permission(role_name, permission)
 
 
 @router.delete("/{role_name}", dependencies=[Depends(require_permission("EDIT_ROLE"))])
-def remove_permission(role_name: str, permission: str, service: PermissionService = Depends(get_permission_service)):
+def remove_permission(
+    role_name: str, 
+    permission: str, 
+    service: PermissionService = Depends(get_permission_service)):
     return service.remove_permission(role_name, permission)
 
 # , dependencies=[Depends(require_permission("EDIT_ROLE"))]
