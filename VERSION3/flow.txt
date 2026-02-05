@@ -1,0 +1,12 @@
+sabse phele ayega db 
+phir dekh services 
+once dine with services take a look at the main.py 
+then dekh api folder 
+auth wale me jyada nhi hai to pareshan na ho 
+
+
+/auth/login
+userid de jwt token milega 
+
+["CREATE_PLAYBOOK", "EDIT_PLAYBOOK", "DELETE_PLAYBOOK", "VIEW_PLAYBOOK", "ADD_VERSION", "EDIT_VERSION", "DELETE_VERSION", "VIEW_PLAYBOOK_CONTENT", "ASSIGN_ROLE"]
+ye sari permission hai 

@@ -20,7 +20,7 @@ class PlaybookVersionService(BaseService):
     
     def get_version(self,playbook_id,version:int):
         response=self.table.get_item(
-            key={
+            Key={
                 "primary_id":f"PLAYBOOK#{playbook_id}",
                 "secondary_id":f"VERSION#{version}"
             },
@@ -102,7 +102,11 @@ class PlaybookVersionService(BaseService):
                 "primary_id": f"PLAYBOOK#{playbook_id}",
                 "secondary_id": f"VERSION#{version}"
             },
-            UpdateExpression="SET content = :c, previous_content = :pc, updated_at = :t",
+            UpdateExpression='''
+            SET content = :c, 
+                previous_content = if_not_exists(previous_content, :pc), 
+                updated_at = :t''',
+            ConditionExpression="attribute_exists(primary_id)",
             ExpressionAttributeValues={
                 ":c": new_content,
                 ":pc": previous_content,

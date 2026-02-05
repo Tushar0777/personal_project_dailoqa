@@ -3,7 +3,7 @@ from jose import jwt,JWTError
 
 SECRET_KEY="THIS_IS_THE_SECRET_KEY"
 ALGORITHM="HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60
+ACCESS_TOKEN_EXPIRE_MINUTES = 600
 
 class JWTService:
 
@@ -11,7 +11,7 @@ class JWTService:
     def create_access_token(user_id:str)->str:
         payload={
             "sub":user_id,
-            "exp":datetime.now()+timedelta(ACCESS_TOKEN_EXPIRE_MINUTES)
+            "exp":datetime.now()+timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
         }
         return jwt.encode(payload,SECRET_KEY,algorithm=ALGORITHM)
     
