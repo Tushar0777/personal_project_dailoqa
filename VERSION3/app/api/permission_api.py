@@ -58,11 +58,26 @@ def bootstrap_admin_permissions(
 
 # ---------- USER PERMISSIONS ----------
 
-@router.get("/user/{user_id}", dependencies=[Depends(require_permission("VIEW_ROLE"))])
-def get_user_permissions(user_id: str,
+@router.get("/user/{user_name}", dependencies=[Depends(require_permission("VIEW_ROLE"))])
+def get_user_permissions(user_name: str,
                          service: PermissionService = Depends(get_permission_service),
                          user_service: UserService = Depends(get_user_service),
                          role_service: RoleService = Depends(get_role_service)):
+    result=user_service.get_user_by_username(user_name)
+
+    if not result.get("user"):
+        raise HTTPException(
+            status_code=404,
+            detail=f"User '{user_name}' not found"
+        )
+    
+    if result["user"].get("is_deleted"):
+        raise HTTPException(
+            status_code=410,
+            detail=f"User '{user_name}' is deleted"
+        )
+    user_id = result["user"]["primary_id"].replace("USER#", "")
+    
     return service.get_user_permissions(user_id, user_service, role_service)
 
 

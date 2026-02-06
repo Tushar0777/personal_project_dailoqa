@@ -32,7 +32,7 @@ def create_playbook(
 
 @router.delete("/",dependencies=[Depends(require_permission("DELETE_PLAYBOOK"))])
 def delete_playbook(
-    playbook_name:str=Body(...),
+    playbook_name:str=Body(...,embed=True),
     service:PlaybookService=Depends(get_playbook_services)
 ):
     result=service.get_playbook_by_name(playbook_name)
@@ -42,7 +42,7 @@ def delete_playbook(
             "playbook_name": playbook_name,
             "wcu": 0
         }
-    playbook_id = result["playbook"]["primary_id"].replace("PLAYBOOK#", "")
+    playbook_id = result["playbook"]["secondary_id"].replace("PLAYBOOK#", "")
     response = service.delete_playbook(playbook_id)
     if not response["deleted"]:
         return {

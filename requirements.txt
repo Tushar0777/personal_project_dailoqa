@@ -8,3 +8,4 @@ pytest
 moto
 python-dotenv
 python-jose[cryptography]
+streamlit

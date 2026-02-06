@@ -15,7 +15,7 @@ def get_user_role():
 def get_permission_service():
     return PermissionService()
 
-# dependencies=[Depends(require_permission("CREATE_USER"))]
+
 @router.post("/")
 def create_user(
     username:str=Body(...),
@@ -23,37 +23,9 @@ def create_user(
     service:UserService=Depends(get_user_service)):
 
     result=service.create_user(username,password)
-    # existing_roles = service.get_user_roles(result["user_id"])["roles"]
-
-    # if not existing_roles:
-    #     # FIRST USER → ADMIN
-    #     service.assign_role(result["user_id"], "ADMIN")
 
     return result
 
-@router.post("/bootstrap-admin")
-def bootstrap_admin(
-    username: str,
-    service: UserService = Depends(get_user_service)
-):
-    result = service.get_user_by_username(username)
-
-    if not result["user"]:
-        raise HTTPException(404, "User not found")
-
-    user_id = result["user"]["user_id"]
-
-    service.assign_role(user_id, "ADMIN")
-
-    return {
-        "status": "BOOTSTRAP_ADMIN_DONE",
-        "username": username
-    }
-
-
-# @router.post("{user_id}/roles",dependencies=[Depends(require_permission("ASSIGN_ROLE"))])
-# def assign_role(user_id:str,role:str,service:UserService=Depends(get_user_service)):
-#     return service.assign_role(user_id=user_id,role=role)
 
 @router.delete("/{user_name}/roles",dependencies=[Depends(require_permission("ASSIGN_ROLE"))])
 def remove_role(
@@ -131,3 +103,23 @@ def list_all_users(service: PermissionService = Depends(get_permission_service),
                    user_service: UserService = Depends(get_user_service),
                    role_service: RoleService = Depends(get_user_role)):
     return service.list_all_users_with_roles_permissions(user_service, role_service)
+
+
+@router.post("/bootstrap-admin")
+def bootstrap_admin(
+    username: str,
+    service: UserService = Depends(get_user_service)
+):
+    result = service.get_user_by_username(username)
+
+    if not result["user"]:
+        raise HTTPException(404, "User not found")
+
+    user_id = result["user"]["user_id"]
+
+    service.assign_role(user_id, "ADMIN")
+
+    return {
+        "status": "BOOTSTRAP_ADMIN_DONE",
+        "username": username
+    }

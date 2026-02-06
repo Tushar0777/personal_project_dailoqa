@@ -1,6 +1,8 @@
 from boto3.dynamodb.conditions import Key, Attr
+from botocore.exceptions import ClientError
 from .base import BaseService
-from datetime import datetime
+from datetime import datetime,timedelta
+import time
 
 
 class PlaybookVersionService(BaseService):
@@ -18,6 +20,7 @@ class PlaybookVersionService(BaseService):
             "rcu":self._extract_capacity(response)
         }
     
+    
     def get_version(self,playbook_id,version:int):
         response=self.table.get_item(
             Key={
@@ -34,52 +37,99 @@ class PlaybookVersionService(BaseService):
     
     def add_version(self,playbook_id:str,version:int,content:str):
         now=datetime.utcnow().isoformat()
+        try:
+            response=self.table.put_item(
+                Item={
+                    "primary_id":f"PLAYBOOK#{playbook_id}",
+                    "secondary_id":f"VERSION#{version}",
+                    "entity_type":"PLAYBOOK_VERSION",
+                    "version":version,
+                    "content":content,
+                    "created_at":now
+                },
+                ConditionExpression="attribute_not_exists(primary_id) AND attribute_not_exists(secondary_id)",
+                ReturnConsumedCapacity="TOTAL"
+            )
+        except ClientError as e:
+            if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
+                return {"status": "VERSION_ALREADY_EXISTS"}
+            raise
 
-        response=self.table.put_item(
-            Item={
-                "primary_id":f"PLAYBOOK#{playbook_id}",
-                "secondary_id":f"VERSION#{version}",
-                "entity_type":"PLAYBOOK_VERSION",
-                "version":version,
-                "content":content,
-                "created_at":now
-            },
-            ReturnConsumedCapacity="TOTAL"
-        )
-
-        return{
-            "status":"VERSION_CREATED",
-            "wcu":self._extract_capacity(response)
-        }
-    
-    def soft_delete_version(self, playbook_id: str, version: int):
-        response = self.table.update_item(
-            Key={
-                "primary_id": f"PLAYBOOK#{playbook_id}",
-                "secondary_id": f"VERSION#{version}"
-            },
-            UpdateExpression="SET is_deleted = :d, deleted_at = :t",
-            ExpressionAttributeValues={
-                ":d": True,
-                ":t": datetime.utcnow().isoformat()
-            },
-            ReturnConsumedCapacity="TOTAL"
-        )
         return {
-            "status": "VERSION_SOFT_DELETED",
+            "status": "VERSION_CREATED",
+            "playbook_id": playbook_id,
+            "version": version,
             "wcu": self._extract_capacity(response)
         }
     
-    def hard_delete_version(self, playbook_id: str, version: int):
-        response = self.table.delete_item(
-            Key={
-                "primary_id": f"PLAYBOOK#{playbook_id}",
-                "secondary_id": f"VERSION#{version}"
-            },
-            ReturnConsumedCapacity="TOTAL"
-        )
+    # def soft_delete_version(self, playbook_id: str, version: int):
+    #     response = self.table.update_item(
+    #         Key={
+    #             "primary_id": f"PLAYBOOK#{playbook_id}",
+    #             "secondary_id": f"VERSION#{version}"
+    #         },
+    #         UpdateExpression="SET is_deleted = :d, deleted_at = :t",
+    #         ExpressionAttributeValues={
+    #             ":d": True,
+    #             ":t": datetime.utcnow().isoformat()
+    #         },
+    #         ReturnConsumedCapacity="TOTAL"
+    #     )
+    #     return {
+    #         "status": "VERSION_SOFT_DELETED",
+    #         "wcu": self._extract_capacity(response)
+    #     }
+    
+    # def hard_delete_version(self, playbook_id: str, version: int):
+    #     response = self.table.delete_item(
+    #         Key={
+                # "primary_id": f"PLAYBOOK#{playbook_id}",
+        #         "secondary_id": f"VERSION#{version}"
+        #     },
+        #     ReturnConsumedCapacity="TOTAL"
+        # )
+        # return {
+        #     "status": "VERSION_HARD_DELETED",
+        #     "wcu": self._extract_capacity(response)
+        # }
+    
+    def delete_version(self, playbook_id: str, version: int):
+        # expire_at = int(
+        #     (datetime.utcnow() + timedelta(minutes=ttl_minutes)).timestamp()
+        # )
+        ttl_days = 7
+        expire_at = int(time.time()) + (ttl_days * 24 * 60 * 60)
+
+        try:
+            response = self.table.update_item(
+                Key={
+                    "primary_id": f"PLAYBOOK#{playbook_id}",
+                    "secondary_id": f"VERSION#{version}"
+                },
+                UpdateExpression="""
+                    SET is_deleted = :d,
+                        deleted_at = :t,
+                        timetolive = :ttl
+                """,
+                ConditionExpression="attribute_exists(primary_id)",
+                ExpressionAttributeValues={
+                    ":d": True,
+                    ":t": datetime.utcnow().isoformat(),
+                    ":ttl": expire_at
+                },
+                ReturnConsumedCapacity="TOTAL"
+            )
+        # except ClientError as e:
+        #     if e["Error"]["Code"] == "ConditionalCheckFailedException":
+        #         return {"status": "VERSION_NOT_FOUND"}
+        except ClientError as e:
+            if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
+                return {"status": "VERSION_NOT_FOUND"}
+            raise
+
         return {
-            "status": "VERSION_HARD_DELETED",
+            "status": "VERSION_MARKED_FOR_DELETION",
+            "ttl_epoch": expire_at,
             "wcu": self._extract_capacity(response)
         }
     
@@ -154,18 +204,3 @@ class PlaybookVersionService(BaseService):
             "status": "VERSION_ROLLED_BACK",
             "wcu": self._extract_capacity(response)
         }
-
-# Optional: Method to clear previous_content after rollback or manually
-# def clear_previous_content(self, playbook_id: str, version: int):
-#     response = self.table.update_item(
-#         Key={
-#             "primary_id": f"PLAYBOOK#{playbook_id}",
-#             "secondary_id": f"VERSION#{version}"
-#         },
-#         UpdateExpression="REMOVE previous_content",
-#         ReturnConsumedCapacity="TOTAL"
-#     )
-#     return {
-#         "status": "PREVIOUS_CONTENT_CLEARED",
-#         "wcu": self._extract_capacity(response)
-#     }

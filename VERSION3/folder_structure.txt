@@ -1,0 +1,1428 @@
+Folder PATH listing
+Volume serial number is B0C8-D459
+D:.
+│   flow.txt
+│
+├───app
+│   │   main.py
+│   │
+│   ├───api
+│   │   │   auth_api.py
+│   │   │   deps.py
+│   │   │   permission_api.py
+│   │   │   playbook_api.py
+│   │   │   user_api.py
+│   │   │   version_api.py
+│   │   │
+
+│   │
+│   ├───auth
+│   │   │   jwt_utils.py
+
+│   ├───db
+│   │   │   dynamodb.py
+│   │   │   tables.py
+│   │   │   __init__.py
+│   │   │
+
+│   │
+│   ├───services
+│   │   │   base.py
+│   │   │   permission_service.py
+│   │   │   playbook_service.py
+│   │   │   playbook_version_service.py
+│   │   │   role_service.py
+│   │   │   user_service.py
+│   │   │
+│   │   
+│   │           
+│   │
+│
+└───temp
+        changes.md
+        document.txt
+
+
+auth_api.py
+from fastapi import APIRouter,HTTPException,status,Depends
+
+from ..auth.jwt_utils import JWTService
+
+from ..services.user_service import UserService
+
+
+router=APIRouter(prefix="/auth",tags=["Auth"])
+
+
+def get_user_service()->UserService:
+    return UserService()
+
+@router.post("/login")
+def login(
+    user_name:str,
+    password:str,
+    user_service:UserService=Depends(get_user_service)):
+
+    result = user_service.get_user_by_username(user_name)
+    if not result["user"]:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    user = result["user"]
+
+    if user["password"] != password:
+        raise HTTPException(status_code=401, detail="Invalid password")
+    
+    token = JWTService.create_access_token(user["user_id"])
+
+    return {
+        "access_token": token,
+        "token_type": "bearer"
+    }
+
+deps.py
+from fastapi import Depends,HTTPException,status,Header
+from fastapi.security import OAuth2PasswordBearer
+
+from ..auth.jwt_utils import JWTService
+
+from ..services.user_service import UserService
+
+from ..services.role_service import RoleService
+
+
+def get_user_service()->UserService:
+    return UserService()
+
+def get_role_service() -> RoleService:
+    return RoleService()
+
+
+def verify_token(token: str):
+    user_id = JWTService.decode_token(token)
+
+    if not user_id:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired token"
+        )
+    user_service=get_user_service()
+    result=user_service.get_user(user_id)
+
+    if not result["user"]:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="user not found"
+        )
+    
+    return user_id
+
+
+def get_current_user(authorization:str=Header(...,alias="Authorization"))->str:
+
+    if not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+    token = authorization.replace("Bearer ", "")
+    user = verify_token(token)
+    return user
+
+
+def get_current_user_role(user_id:str=Depends(get_current_user),
+                          user_service:UserService=Depends(get_user_service)
+                          ):
+    result=user_service.get_user_roles(user_id)
+    roles=result["roles"]
+
+    if not roles:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="no role assigned")
+
+    return roles
+
+
+def require_permission(permission:str):
+    def checker(roles:list[str]=Depends(get_current_user_role),
+                role_service:RoleService=Depends(get_role_service)
+                ):
+        
+        for role in roles:
+            perms=role_service.get_permissions(role)["permissions"]
+            if permission in perms:
+                return True
+            
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"missing permissions {permission}")
+        
+
+    return checker
+
+
+permission_api.py
+
+from fastapi import APIRouter, Depends, HTTPException, status
+from ..services.permission_service import PermissionService
+from ..services.user_service import UserService
+from ..services.role_service import RoleService
+from ..api.deps import require_permission
+
+router = APIRouter(prefix="/permissions", tags=["Permissions"])
+
+def get_permission_service():
+    return PermissionService()
+
+def get_user_service():
+    return UserService()
+
+def get_role_service():
+    return RoleService()
+
+@router.get("/{role_name}", dependencies=[Depends(require_permission("VIEW_ROLE"))])
+def list_permissions(
+    role_name: str, 
+    service: PermissionService = Depends(get_permission_service)):
+    return service.list_permissions(role_name)
+
+
+@router.post("/{role_name}", dependencies=[Depends(require_permission("EDIT_ROLE"))])
+def add_permission(
+    role_name: str, 
+    permission: str, 
+    service: PermissionService = Depends(get_permission_service)):
+    return service.add_permission(role_name, permission)
+
+
+@router.delete("/{role_name}", dependencies=[Depends(require_permission("EDIT_ROLE"))])
+def remove_permission(
+    role_name: str, 
+    permission: str, 
+    service: PermissionService = Depends(get_permission_service)):
+    return service.remove_permission(role_name, permission)
+
+# , dependencies=[Depends(require_permission("EDIT_ROLE"))]
+@router.post("/{role_name}/assign-all")
+def assign_all_permissions(
+    role_name: str, 
+    all_permissions: list[str], 
+    service: PermissionService = Depends(get_permission_service)):
+    return service.assign_all_permissions(role_name, all_permissions)
+
+# , dependencies=[Depends(require_permission("EDIT_ROLE"))]
+@router.post("/bootstrap-admin-permissions")
+def bootstrap_admin_permissions(
+    all_permissions: list[str], 
+    service: PermissionService = Depends(get_permission_service)):
+    return service.bootstrap_admin_permissions(all_permissions)
+
+
+@router.get("/user/{user_name}", dependencies=[Depends(require_permission("VIEW_ROLE"))])
+def get_user_permissions(user_name: str,
+                         service: PermissionService = Depends(get_permission_service),
+                         user_service: UserService = Depends(get_user_service),
+                         role_service: RoleService = Depends(get_role_service)):
+    result=user_service.get_user_by_username(user_name)
+
+    if not result.get("user"):
+        raise HTTPException(
+            status_code=404,
+            detail=f"User '{user_name}' not found"
+        )
+    
+    if result["user"].get("is_deleted"):
+        raise HTTPException(
+            status_code=410,
+            detail=f"User '{user_name}' is deleted"
+        )
+    user_id = result["user"]["primary_id"].replace("USER#", "")
+    
+    return service.get_user_permissions(user_id, user_service, role_service)
+
+
+playbook_api.py
+
+from fastapi import APIRouter,Depends,Body
+from ..services.playbook_service import PlaybookService
+from ..api.deps import require_permission,get_current_user
+
+
+router=APIRouter(prefix="/playbooks",tags=['Playbooks'])
+
+def get_playbook_services():
+    return PlaybookService()
+
+@router.get("/",dependencies=[Depends(require_permission("VIEW_PLAYBOOK"))])
+def list_playbooks(
+    service:PlaybookService=Depends(get_playbook_services)):
+    return service.list_all_playbooks()
+
+
+@router.post("/",dependencies=[Depends(require_permission("CREATE_PLAYBOOK"))])
+def create_playbook(
+    playbook_name:str=Body(...),
+    title:str=Body(...),
+    description:str=Body(...),
+    user_id:str=Depends(get_current_user),
+    service:PlaybookService=Depends(get_playbook_services)):
+
+    return service.create_playbook(
+        name=playbook_name,
+        title=title,
+        description=description,
+        editor_id=user_id)
+
+@router.delete("/",dependencies=[Depends(require_permission("DELETE_PLAYBOOK"))])
+def delete_playbook(
+    playbook_name:str=Body(...),
+    service:PlaybookService=Depends(get_playbook_services)
+):
+    result=service.get_playbook_by_name(playbook_name)
+    if not result["playbook"]:
+        return {
+            "status": "PLAYBOOK_NOT_FOUND",
+            "playbook_name": playbook_name,
+            "wcu": 0
+        }
+    playbook_id = result["playbook"]["primary_id"].replace("PLAYBOOK#", "")
+    response = service.delete_playbook(playbook_id)
+    if not response["deleted"]:
+        return {
+            "status": "PLAYBOOK_ALREADY_DELETED",
+            "playbook_name": playbook_name,
+            "wcu": 0
+        }
+    return {
+        "status": "PLAYBOOK_DELETED",
+        "playbook_name": playbook_name,
+        "wcu": response["wcu"]
+    }
+
+user_api.py
+
+
+from fastapi import APIRouter,Depends,HTTPException,status,Body
+from ..services.user_service import UserService
+from ..services.role_service import RoleService
+from ..services.permission_service import PermissionService
+from ..api.deps import require_permission
+
+router=APIRouter(prefix="/users",tags=['users'])
+
+def get_user_service():
+    return UserService()
+
+def get_user_role():
+    return RoleService()
+
+def get_permission_service():
+    return PermissionService()
+
+
+@router.post("/")
+def create_user(
+    username:str=Body(...),
+    password:str=Body(...),
+    service:UserService=Depends(get_user_service)):
+
+    result=service.create_user(username,password)
+
+    return result
+
+@router.post("/bootstrap-admin")
+def bootstrap_admin(
+    username: str,
+    service: UserService = Depends(get_user_service)
+):
+    result = service.get_user_by_username(username)
+
+    if not result["user"]:
+        raise HTTPException(404, "User not found")
+
+    user_id = result["user"]["user_id"]
+
+    service.assign_role(user_id, "ADMIN")
+
+    return {
+        "status": "BOOTSTRAP_ADMIN_DONE",
+        "username": username
+    }
+
+
+
+@router.delete("/{user_name}/roles",dependencies=[Depends(require_permission("ASSIGN_ROLE"))])
+def remove_role(
+    user_name:str,
+    role:str=Body(...),
+    user_service:UserService=Depends(get_user_service)):
+     result=user_service.get_user_by_username(username=user_name)
+
+     if not result["user"]:
+         return{
+             "removed":False,
+             "reason":"User not found",
+             "wcu":0
+         }
+     user_id=result["user"]["user_id"]
+     
+     response=user_service.remove_role(user_id=user_id,role=role)
+     if not response["removed"]:
+         return {
+            "status": "ROLE_NOT_ASSIGNED",
+            "user_name": user_name,
+            "role": role,
+            "wcu": 0
+        }
+     return {
+            "status": "ROLE_REMOVED",
+            "user_name": user_name,
+            "role": role,
+            "wcu": response["wcu"]
+        }
+
+
+@router.post(
+    "/assign-role",
+    dependencies=[Depends(require_permission("ASSIGN_ROLE"))]
+)
+def assign_role_by_username(
+        user_name:str=Body(...),
+        role:str=Body(...),
+        user_service:UserService=Depends(get_user_service),
+        role_service:RoleService=Depends(get_user_role)
+):
+
+    result = user_service.get_user_by_username(user_name)
+
+    if not result["user"]:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
+        )
+
+    user_id = result["user"]["user_id"]
+
+
+    response = user_service.assign_role(user_id, role)
+
+    if not response["assigned"]:
+        return {
+            "status": "ROLE_ALREADY_ASSIGNED",
+            "username": user_name,
+            "role": role,
+            "wcu": 0
+        }
+
+    return {
+        "status": "ROLE_ASSIGNED",
+        "username": user_name,
+        "role": role,
+        "wcu": response.get("ConsumedCapacity", {}).get("CapacityUnits", 0)
+    }
+
+
+@router.get("/all-users", dependencies=[Depends(require_permission("VIEW_ROLE"))])
+def list_all_users(service: PermissionService = Depends(get_permission_service),
+                   user_service: UserService = Depends(get_user_service),
+                   role_service: RoleService = Depends(get_user_role)):
+    return service.list_all_users_with_roles_permissions(user_service, role_service)
+
+
+
+version_api.py
+
+from fastapi import APIRouter,Depends,Body,HTTPException,status
+# from app.api.deps import require_permission
+from .deps import require_permission
+# from app.services.playbook_version_service import PlaybookVersionService
+from ..services.playbook_version_service import PlaybookVersionService
+from ..services.playbook_service import PlaybookService
+
+router=APIRouter(prefix="/playbooks",tags=["Versions"])
+
+def get_version_service()->PlaybookVersionService:
+    return PlaybookVersionService()
+
+def get_playbook_service()->PlaybookService:
+    return PlaybookService()
+
+
+@router.get("/{playbook_name}/versions",dependencies=[Depends(require_permission("VIEW_PLAYBOOK_CONTENT"))])
+def list_versions(
+    playbook_name:str,
+    service:PlaybookVersionService=Depends(get_version_service),
+    playbook_service:PlaybookService=Depends(get_playbook_service)
+    ):
+    result=playbook_service.get_playbook_by_name(playbook_name)
+
+    if not result["playbook"]:
+        raise HTTPException(
+        status_code=404,
+        detail=f"Playbook '{playbook_name}' not found")
+    if result["playbook"].get("is_deleted"):
+        raise HTTPException(
+            status_code=410,
+            detail=f"Playbook '{playbook_name}' is deleted"
+        )
+    
+    playbook_id=result["playbook"]["primary_id"].replace("PLAYBOOK#","")
+    return service.list_versions(playbook_id)
+
+
+@router.get("/{playbook_name}/versions/{version}",dependencies=[Depends(require_permission("VIEW_PLAYBOOK_CONTENT"))])
+def get_version(
+    playbook_name:str,
+    version:int,
+    service:PlaybookVersionService=Depends(get_version_service),
+    playbook_service:PlaybookService=Depends(get_playbook_service)
+    ):
+    pb = playbook_service.get_playbook_by_name(playbook_name)
+
+    if not pb["playbook"]:
+        raise HTTPException(404, f"Playbook '{playbook_name}' not found")
+
+    if pb["playbook"].get("is_deleted"):
+        raise HTTPException(410, "Playbook is deleted")
+
+    playbook_id = pb["playbook"]["primary_id"].replace("PLAYBOOK#", "")
+
+    res = service.get_version(playbook_id, version)
+
+    if not res["version"]:
+        raise HTTPException(404, f"Version {version} not found")
+
+    if res["version"].get("is_deleted"):
+        raise HTTPException(410, "Version is deleted")
+
+    return res
+
+
+@router.post("/{playbook_name}/versions",
+             dependencies=[Depends(require_permission("ADD_VERSION"))])
+def add_version(
+    playbook_name:str,
+    version:int=Body(...),
+    content:str=Body(...),
+    service:PlaybookVersionService=Depends(get_version_service),
+    playbook_service:PlaybookService=Depends(get_playbook_service)
+    ):
+
+    result=playbook_service.get_playbook_by_name(playbook_name)
+
+
+    if result["playbook"].get("is_deleted"):
+        return {
+            "status": "PLAYBOOK_DELETED",
+            "playbook_name": playbook_name,
+            "wcu": 0
+        }
+    if not result["playbook"]:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Playbook '{playbook_name}' not found"
+        )
+
+    if version <= 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Version must be positive integer"
+        )
+
+    if not content.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="Content cannot be empty"
+        )
+    playbook_id=result["playbook"]["primary_id"].replace("PLAYBOOK#","")
+
+    result=service.add_version(playbook_id,version,content)
+
+    if result["status"] == "VERSION_ALREADY_EXISTS":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Version {version} already exists for playbook {playbook_name}"
+        )
+    
+    return result
+
+
+@router.delete(
+    "/{playbook_name}/versions/{version}",
+    dependencies=[Depends(require_permission("DELETE_VERSION"))]
+)
+def delete_version(
+    playbook_name: str,
+    version: int,
+    service: PlaybookVersionService = Depends(get_version_service),
+    playbook_service: PlaybookService = Depends(get_playbook_service)
+):
+    pb = playbook_service.get_playbook_by_name(playbook_name)
+
+    if not pb["playbook"]:
+        raise HTTPException(404, "Playbook not found")
+
+    if pb["playbook"].get("is_deleted"):
+        raise HTTPException(410, "Playbook is deleted")
+
+    playbook_id = pb["playbook"]["primary_id"].replace("PLAYBOOK#", "")
+
+    v = service.get_version(playbook_id, version)
+
+    if not v["version"]:
+        raise HTTPException(404, "Version not found")
+
+    if v["version"].get("is_deleted"):
+        raise HTTPException(409, "Version already deleted")
+
+    return service.delete_version(playbook_id, version)
+
+
+
+@router.put("/{playbook_name}/versions/{version}",dependencies=[Depends(require_permission("EDIT_VERSION"))])
+def update_version(
+    playbook_name:str, 
+    version:int, 
+    content:str=Body(...), 
+    service:PlaybookVersionService=Depends(get_version_service),
+    playbook_service:PlaybookService=Depends(get_playbook_service)
+    ):
+
+    pb = playbook_service.get_playbook_by_name(playbook_name)
+
+    if not pb["playbook"]:
+        raise HTTPException(404, "Playbook not found")
+
+    if pb["playbook"].get("is_deleted"):
+        raise HTTPException(410, "Playbook is deleted")
+
+    playbook_id = pb["playbook"]["primary_id"].replace("PLAYBOOK#", "")
+
+    res = service.get_version(playbook_id, version)
+
+    if not res["version"]:
+        raise HTTPException(404, "Version not found")
+
+    if res["version"].get("is_deleted"):
+        raise HTTPException(409, "Version is deleted")
+
+    return service.update_version(playbook_id, version, content)
+
+
+@router.put("/{playbook_name}/versions/{version}/rollback",dependencies=[Depends(require_permission("EDIT_VERSION"))])
+def rollback_version(
+    playbook_name:str, 
+    version:int, 
+    service:PlaybookVersionService=Depends(get_version_service),
+    playbook_service:PlaybookService=Depends(get_playbook_service)):
+    
+    result=playbook_service.get_playbook_by_name(playbook_name)
+
+    if not result["playbook"]:
+        return{
+            "status":"PLAYBOOK NOT FOUND",
+            "playbook_name":playbook_name,
+            "wcu":0
+        }
+
+    if result["status"] == "VERSION_NOT_FOUND":
+        raise HTTPException(404, "Version not found")
+
+    if result["status"] == "VERSION_DELETED":
+        raise HTTPException(409, "Cannot rollback deleted version")
+
+    
+    playbook_id=result["playbook"]["primary_id"].replace("PLAYBOOK#","")
+
+    return service.rollback_version(playbook_id, version)
+
+
+jwt_utils.py
+
+from datetime import datetime,timedelta
+from jose import jwt,JWTError
+
+SECRET_KEY="THIS_IS_THE_SECRET_KEY"
+ALGORITHM="HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 600
+
+class JWTService:
+
+    @staticmethod
+    def create_access_token(user_id:str)->str:
+        payload={
+            "sub":user_id,
+            "exp":datetime.now()+timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+        }
+        return jwt.encode(payload,SECRET_KEY,algorithm=ALGORITHM)
+    
+
+    @staticmethod
+    def decode_token(token:str)->str:
+        try:
+            payload=jwt.decode(token,SECRET_KEY,algorithms=[ALGORITHM])
+            return payload["sub"]
+        except JWTError:
+            return None
+
+
+
+dynamodb.py
+
+from dotenv import load_dotenv
+load_dotenv()
+import os
+import boto3
+from functools import lru_cache
+
+aws_region=os.getenv("AWS_REGION")
+
+@lru_cache
+def get_dynamodb_resource():
+    return boto3.resource(
+        "dynamodb",
+        region_name=aws_region
+    )
+
+
+tables.py
+
+from .dynamodb import get_dynamodb_resource
+
+def get_table(table_name:str="playbook_core"):
+
+    dynamodb=get_dynamodb_resource()
+    return dynamodb.Table(table_name)
+
+base.py
+
+from ..db.tables import get_table
+
+class BaseService:
+    def __init__(self,table_name:str="playbook_core"):
+        self.table=get_table(table_name)
+
+    def _extract_capacity(self,response:dict)->float:
+        return response.get("ConsumedCapacity",{}).get("CapacityUnits",0)
+
+
+
+permission_service.py
+
+from .base import BaseService
+from boto3.dynamodb.conditions import Key, Attr
+from datetime import datetime
+
+class PermissionService(BaseService):
+    """
+    Service to manage role permissions and user permissions.
+    """
+
+    # ---------- ROLE PERMISSIONS ----------
+
+    def list_permissions(self, role_name: str):
+        """List permissions assigned to a role."""
+        response = self.table.get_item(
+            Key={
+                "primary_id": f"ROLE#{role_name}",
+                "secondary_id": "METADATA"
+            },
+            ReturnConsumedCapacity="TOTAL"
+        )
+
+        permissions = response.get("Item", {}).get("permissions", [])
+        return {
+            "role": role_name,
+            "permissions": permissions,
+            "rcu": self._extract_capacity(response)
+        }
+
+    def add_permission(self, role_name: str, permission: str):
+        """Add a permission to a role."""
+        response = self.table.update_item(
+            Key={
+                "primary_id": f"ROLE#{role_name}",
+                "secondary_id": "METADATA"
+            },
+            UpdateExpression="SET permissions = list_append(if_not_exists(permissions, :empty), :p)",
+            ExpressionAttributeValues={
+                ":p": [permission],
+                ":empty": []
+            },
+            ReturnConsumedCapacity="TOTAL"
+        )
+        return {
+            "status": "PERMISSION_ADDED",
+            "role": role_name,
+            "permission": permission,
+            "wcu": self._extract_capacity(response)
+        }
+
+    def remove_permission(self, role_name: str, permission: str):
+        """Remove a permission from a role."""
+        current = self.table.get_item(
+            Key={
+                "primary_id": f"ROLE#{role_name}",
+                "secondary_id": "METADATA"
+            }
+        )
+        item = current.get("Item")
+        if not item:
+            return {"status": "ROLE_NOT_FOUND"}
+
+        permissions = item.get("permissions", [])
+        if permission not in permissions:
+            return {"status": "PERMISSION_NOT_FOUND"}
+
+        permissions.remove(permission)
+
+        response = self.table.update_item(
+            Key={
+                "primary_id": f"ROLE#{role_name}",
+                "secondary_id": "METADATA"
+            },
+            UpdateExpression="SET permissions = :p",
+            ExpressionAttributeValues={":p": permissions},
+            ReturnConsumedCapacity="TOTAL"
+        )
+
+        return {
+            "status": "PERMISSION_REMOVED",
+            "role": role_name,
+            "permission": permission,
+            "wcu": self._extract_capacity(response)
+        }
+
+    def assign_all_permissions(self, role_name: str, all_permissions: list[str]):
+        """Assign all permissions to a role (overwrite existing)."""
+        response = self.table.update_item(
+            Key={
+                "primary_id": f"ROLE#{role_name}",
+                "secondary_id": "METADATA"
+            },
+            # UpdateExpression="SET permissions = :p",
+            UpdateExpression="SET #p = :p",
+            ExpressionAttributeNames={
+            "#p": "permissions"  # reserved keyword ko map kar rahe
+            },
+            ExpressionAttributeValues={
+                ":p": all_permissions
+            },
+            ReturnValues="UPDATED_NEW",
+            ReturnConsumedCapacity="TOTAL"
+        )
+        return {
+            "status": "ALL_PERMISSIONS_ASSIGNED",
+            "role": role_name,
+            "permissions": all_permissions,
+            "wcu": self._extract_capacity(response)
+        }
+
+    def bootstrap_admin_permissions(self, all_permissions: list[str]):
+        """Assign all permissions to ADMIN role."""
+        return self.assign_all_permissions("ADMIN", all_permissions)
+
+    # ---------- USER PERMISSIONS ----------
+
+    def get_user_permissions(self, user_id: str, user_service, role_service):
+        """Get aggregated permissions of a user from their roles."""
+        roles_result = user_service.get_user_roles(user_id)
+        roles = roles_result.get("roles", [])
+
+        if not roles:
+            return {"user_id": user_id, "roles": [], "permissions": []}
+
+        user_permissions = set()
+        for role in roles:
+            perms = role_service.get_permissions(role).get("permissions", [])
+            user_permissions.update(perms)
+
+        return {
+            "user_id": user_id,
+            "roles": roles,
+            "permissions": list(user_permissions)
+        }
+
+    def list_all_users_with_roles_permissions(self, user_service, role_service):
+        """List all users with username, roles, and permissions."""
+        response = self.table.scan(
+            FilterExpression=Attr("entity_type").eq("USER"),
+            ReturnConsumedCapacity="TOTAL"
+        )
+
+        users = []
+        for item in response.get("Items", []):
+            user_id = item.get("primary_id").replace("USER#", "")
+            username = item.get("username")
+            user_info = self.get_user_permissions(user_id, user_service, role_service)
+            user_info["username"] = username
+            users.append(user_info)
+
+        return {
+            "users": users,
+            "rcu": self._extract_capacity(response)
+        }
+
+playbook_service.py
+
+from boto3.dynamodb.conditions import Key, Attr
+from botocore.exceptions import ClientError
+from .base import BaseService
+from datetime import datetime
+import time
+import uuid
+import hashlib
+import json
+
+class PlaybookService(BaseService):
+
+    def _generate_idempotency_key(self, name: str) -> str:
+        normalized_name = name.strip().lower()
+        return hashlib.sha256(
+            json.dumps({"name": normalized_name}, sort_keys=True).encode()
+        ).hexdigest()
+    
+    def get_playbook_by_name(self, name: str):
+        response = self.table.scan(
+            FilterExpression=
+                Attr("entity_type").eq("PLAYBOOK_META") &
+                Attr("name").eq(name) &
+                Attr("is_deleted").ne(True),
+            ReturnConsumedCapacity="TOTAL"
+        )
+
+        items = response.get("Items", [])
+
+        if not items:
+            return {
+                "playbook": None,
+                "rcu": self._extract_capacity(response)
+            }
+
+        return {
+            "playbook": items[0],   # assuming name unique
+            "rcu": self._extract_capacity(response)
+        }
+    
+    def list_all_playbooks(self):
+        response = self.table.scan(
+            FilterExpression=
+                Attr("entity_type").eq("PLAYBOOK_META") &
+                Attr("is_deleted").ne(True),
+            ReturnConsumedCapacity="TOTAL"
+        )
+
+        return {
+            "playbooks": response.get("Items", []),
+            "rcu": self._extract_capacity(response)
+        }
+    
+
+    def create_playbook(self,name:str,title:str,description:str,editor_id:str):
+        
+        idempotency_key = self._generate_idempotency_key(name)
+
+        pk = f"IDEMPOTENCY#{idempotency_key}"
+
+        now=datetime.utcnow().isoformat()
+
+        existing = self.table.get_item(
+            Key={"primary_id": pk, "secondary_id": "REQUEST"}
+        )
+        if "Item" in existing:
+            item = existing["Item"]
+
+            if item["status"] == "DONE":
+                return json.loads(item["response_body"])
+            if item["status"] == "LOCKED":
+                return {"status": "Request already in progress"}
+            
+
+        try:
+            self.table.put_item(
+                Item={
+                    "primary_id": pk,
+                    "secondary_id": "REQUEST",
+                    "status": "LOCKED",
+                    "created_at": now,
+                    "ttl": int(datetime.utcnow().timestamp()) + 86400
+                    # ek din ka ttl
+                },
+                ConditionExpression="attribute_not_exists(primary_id)"
+            )
+        except ClientError as e:
+            if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
+                return {"status": "Request already in progress"}
+            # result["status"]
+            raise
+
+        playbook_id=str(uuid.uuid4())
+
+
+        response=self.table.put_item(
+            Item={
+                "primary_id":f"PLAYBOOK#{playbook_id}",
+                "secondary_id":"METADATA",
+                "entity_type":"PLAYBOOK_META",
+                "name":name,
+                "title":title,
+                "description":description,
+                "created_by":f"USER#{editor_id}",
+                "created_at":now,
+                "is_deleted":False
+            },
+            ReturnConsumedCapacity="TOTAL"
+        )
+        response_body={
+            "status":"playbook created",
+            "playbook_id":playbook_id,
+            "wcu":self._extract_capacity(response)
+        }
+        self.table.update_item(
+            Key={"primary_id": pk, "secondary_id": "REQUEST"},
+            UpdateExpression="SET #s = :done, response_body = :r",
+            ExpressionAttributeNames={"#s": "status"},
+            ExpressionAttributeValues={
+                ":done": "DONE",
+                ":r": json.dumps(response_body)
+            }
+        )
+        return response_body
+    
+    def delete_playbook(self, playbook_id: str):
+        try:
+            ttl_days = 7
+            expire_at = int(time.time()) + (ttl_days * 24 * 60 * 60)
+            response=self.table.update_item(
+                Key={
+                    "primary_id": f"PLAYBOOK#{playbook_id}",
+                    "secondary_id": "METADATA"
+                },
+                UpdateExpression="SET is_deleted = :d, expire_at = :ttl",
+                ExpressionAttributeValues={
+                    ":d": True,
+                    ":ttl":expire_at
+                    },
+                ReturnConsumedCapacity="TOTAL"
+            )
+            return{
+                "deleted":True,
+                "response":response,
+                "wcu":self._extract_capacity(response)
+            }
+        except ClientError as e:
+            if e.response["Error"]["Code"]=="ConditionalCheckFailedException":
+                return {
+                    "deleted": False,
+                    "reason": "PLAYBOOK_ALREADY_DELETED",
+                    "wcu": 0
+                }
+            raise
+
+playbook_version_service.py
+
+from boto3.dynamodb.conditions import Key, Attr
+from botocore.exceptions import ClientError
+from .base import BaseService
+from datetime import datetime,timedelta
+import time
+
+
+class PlaybookVersionService(BaseService):
+
+    def list_versions(self,playbook_id:str):
+        response=self.table.query(
+            KeyConditionExpression=Key("primary_id").eq(f"PLAYBOOK#{playbook_id}")&
+            Key("secondary_id").begins_with("METADATA"),
+            FilterExpression=Attr("is_deleted").ne(True),
+            ReturnConsumedCapacity="TOTAL"
+        )
+
+        return{
+            "versions":response.get("Items",[]),
+            "rcu":self._extract_capacity(response)
+        }
+    
+    def get_version(self,playbook_id,version:int):
+        response=self.table.get_item(
+            Key={
+                "primary_id":f"PLAYBOOK#{playbook_id}",
+                "secondary_id":f"VERSION#{version}"
+            },
+            ReturnConsumedCapacity="TOTAL"
+        )
+
+        return{
+            "version":response.get("Item"),
+            "rcu":self._extract_capacity(response)
+        }
+    
+    def add_version(self,playbook_id:str,version:int,content:str):
+        now=datetime.utcnow().isoformat()
+        try:
+            response=self.table.put_item(
+                Item={
+                    "primary_id":f"PLAYBOOK#{playbook_id}",
+                    "secondary_id":f"VERSION#{version}",
+                    "entity_type":"PLAYBOOK_VERSION",
+                    "version":version,
+                    "content":content,
+                    "created_at":now
+                },
+                ConditionExpression="attribute_not_exists(primary_id) AND attribute_not_exists(secondary_id)",
+                ReturnConsumedCapacity="TOTAL"
+            )
+        except ClientError as e:
+            if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
+                return {"status": "VERSION_ALREADY_EXISTS"}
+            raise
+
+        return {
+            "status": "VERSION_CREATED",
+            "playbook_id": playbook_id,
+            "version": version,
+            "wcu": self._extract_capacity(response)
+        }
+    
+   
+    
+    def delete_version(self, playbook_id: str, version: int):
+
+        ttl_days = 7
+        expire_at = int(time.time()) + (ttl_days * 24 * 60 * 60)
+
+        try:
+            response = self.table.update_item(
+                Key={
+                    "primary_id": f"PLAYBOOK#{playbook_id}",
+                    "secondary_id": f"VERSION#{version}"
+                },
+                UpdateExpression="""
+                    SET is_deleted = :d,
+                        deleted_at = :t,
+                        timetolive = :ttl
+                """,
+                ConditionExpression="attribute_exists(primary_id)",
+                ExpressionAttributeValues={
+                    ":d": True,
+                    ":t": datetime.utcnow().isoformat(),
+                    ":ttl": expire_at
+                },
+                ReturnConsumedCapacity="TOTAL"
+            )
+
+        except ClientError as e:
+            if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
+                return {"status": "VERSION_NOT_FOUND"}
+            raise
+
+        return {
+            "status": "VERSION_MARKED_FOR_DELETION",
+            "ttl_epoch": expire_at,
+            "wcu": self._extract_capacity(response)
+        }
+    
+    def update_version(self, playbook_id: str, version: int, new_content: str):
+        # First, get the current version to save previous content
+        current = self.table.get_item(
+            Key={
+                "primary_id": f"PLAYBOOK#{playbook_id}",
+                "secondary_id": f"VERSION#{version}"
+            }
+        )
+        item = current.get("Item")
+        if not item:
+            return {"status": "VERSION_NOT_FOUND"}
+        
+        previous_content = item.get("content")
+        
+        response = self.table.update_item(
+            Key={
+                "primary_id": f"PLAYBOOK#{playbook_id}",
+                "secondary_id": f"VERSION#{version}"
+            },
+            UpdateExpression='''
+            SET content = :c, 
+                previous_content = if_not_exists(previous_content, :pc), 
+                updated_at = :t''',
+            ConditionExpression="attribute_exists(primary_id)",
+            ExpressionAttributeValues={
+                ":c": new_content,
+                ":pc": previous_content,
+                ":t": datetime.utcnow().isoformat()
+            },
+            ReturnConsumedCapacity="TOTAL"
+        )
+        return {
+            "status": "VERSION_UPDATED",
+            "wcu": self._extract_capacity(response)
+        }
+    
+    def rollback_version(self, playbook_id: str, version: int):
+        # Get the current version
+        current = self.table.get_item(
+            Key={
+                "primary_id": f"PLAYBOOK#{playbook_id}",
+                "secondary_id": f"VERSION#{version}"
+            }
+        )
+        item = current.get("Item")
+        if not item:
+            return {"status": "VERSION_NOT_FOUND"}
+        
+        previous_content = item.get("previous_content")
+        if not previous_content:
+            return {"status": "NO_PREVIOUS_CONTENT"}
+        
+        current_content = item.get("content")
+        
+        response = self.table.update_item(
+            Key={
+                "primary_id": f"PLAYBOOK#{playbook_id}",
+                "secondary_id": f"VERSION#{version}"
+            },
+            UpdateExpression="SET content = :c, previous_content = :pc, rolled_back_at = :t",
+            ExpressionAttributeValues={
+                ":c": previous_content,
+                ":pc": current_content,
+                ":t": datetime.utcnow().isoformat()
+            },
+            ReturnConsumedCapacity="TOTAL"
+        )
+        return {
+            "status": "VERSION_ROLLED_BACK",
+            "wcu": self._extract_capacity(response)
+        }
+
+
+role_service.py
+
+from .base import BaseService
+
+class RoleService(BaseService):
+    def get_permissions(self,role_name:str):
+        response=self.table.get_item(
+            Key={
+                "primary_id":f"ROLE#{role_name}",
+                "secondary_id":"METADATA"
+            },
+            ReturnConsumedCapacity="TOTAL"
+        )
+
+
+        return{
+            "permissions":response.get("Item",{}).get("permissions",[]),
+            "rcu":self._extract_capacity(response)
+        }
+
+
+user_service.py
+
+from .base import BaseService
+from boto3.dynamodb.conditions import Key
+from datetime import datetime
+import uuid
+from botocore.exceptions import ClientError
+
+class UserService(BaseService):
+
+    def get_user(self,user_id):
+        response=self.table.get_item(
+            Key={
+                "primary_id":f"USER#{user_id}",
+                "secondary_id":"PROFILE"
+            },
+            ReturnConsumedCapacity="TOTAL"
+        )
+        return {
+            "user":response.get("Item"),
+            "rcu":self._extract_capacity(response)
+        }
+    
+    def get_user_roles(self,user_id:str):
+        response=self.table.query(
+            KeyConditionExpression=Key("primary_id").eq(f"USER#{user_id}") & Key("secondary_id").begins_with("ROLE#"),
+            ReturnConsumedCapacity="TOTAL"
+        )
+
+        roles=[
+            item["secondary_id"].replace("ROLE#","")
+            for item in response.get("Items",[])
+        ]
+
+        return{
+            "roles":roles,
+            "rcu":self._extract_capacity(response)
+        }
+    
+    def create_user(self,user_name:str,password:str):
+        user_id=str(uuid.uuid4())
+        now=datetime.utcnow().isoformat()
+        try:
+            response1=self.table.put_item(
+                Item={
+                    "primary_id": f"USERNAME#{user_name}",
+                    "secondary_id": "USER",
+                    "user_id": user_id
+                },
+                ConditionExpression="attribute_not_exists(primary_id)"
+            )
+            response2=self.table.put_item(
+                Item={
+                    "primary_id":f"USER#{user_id}",
+                    "secondary_id":"PROFILE",
+                    "entity_type":"USER",
+                    "username":user_name,
+                    "password":password,
+                    "created_at":now
+                },
+                ReturnConsumedCapacity="TOTAL"
+            )
+        except ClientError:
+            self.table.delete_item(
+            Key={
+                "primary_id": f"USERNAME#{user_name}",
+                "secondary_id": "USER"
+            }
+            )
+            raise
+        return {
+            "user_id": user_id,
+            "username": user_name,
+            "capacity": {
+                "username_write": self._extract_capacity(response1),
+                "profile_write": self._extract_capacity(response2)
+            }
+        }
+    
+    def assign_role(self,user_id:str,role:str):
+        try:
+            response=self.table.put_item(
+                Item={
+                    "primary_id":f"USER#{user_id}",
+                    "secondary_id":f"ROLE#{role}",
+                    "entity_type":"USER_ROLE"
+                },
+                ConditionExpression="attribute_not_exists(secondary_id)",
+                ReturnConsumedCapacity="TOTAL"
+            )
+            return{
+                "response":response,
+                "assigned":True,
+                "wcu":self._extract_capacity(response)
+            }
+        except ClientError as e:
+            if e.response["Error"]["Code"]=="ConditionalCheckFailedException":
+                return{
+                    "assigned": False,
+                    "reason": "ROLE_ALREADY_ASSIGNED"
+                }
+            raise
+    
+    def remove_role(self,user_id:str,role:str):
+        try:
+            response=self.table.delete_item(
+                Key={
+                    "primary_id": f"USER#{user_id}",
+                    "secondary_id": f"ROLE#{role}"
+                },
+                ConditionExpression="attribute_exists(secondary_id)",
+                ReturnConsumedCapacity="TOTAL"
+            )
+            return{
+                "removed":True,
+                "response":response,
+                "wcu":self._extract_capacity(response)
+            }
+        except ClientError as e:
+            if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
+                return {
+                    "removed": False,
+                    "reason": "ROLE_NOT_ASSIGNED",
+                    "wcu": 0
+                }
+            raise
+
+    
+    def get_user_by_username(self,username:str):
+        response=self.table.get_item(
+            Key={
+                "primary_id":f"USERNAME#{username}",
+                "secondary_id":"USER"
+            },
+            ReturnConsumedCapacity="TOTAL"
+        )
+        if "Item" not in response:
+            return {"user": None}
+
+        user_id = response["Item"]["user_id"]
+
+        profile = self.table.get_item(
+            Key={
+                "primary_id": f"USER#{user_id}",
+                "secondary_id": "PROFILE"
+            },
+            ReturnConsumedCapacity="TOTAL"
+        )
+
+        user = profile.get("Item")
+        if user:
+            user["user_id"] = user_id
+
+        return {
+            "user": user,
+            "capacity": {
+                "username_read": self._extract_capacity(response),
+                "profile_read": self._extract_capacity(profile)
+            }
+        }
+
+
+main.py
+
+from fastapi import FastAPI
+from .api import auth_api,playbook_api,version_api,user_api,permission_api
+
+def create_app() -> FastAPI:
+    app = FastAPI(
+        title="Playbook Platform",
+        version="1.0.0",
+        description="Role-based Playbook Management System"
+    )
+
+    app.include_router(auth_api.router, tags=["Auth"])
+    app.include_router(playbook_api.router, tags=["Playbooks"])
+    app.include_router(version_api.router,tags=["Versions"])
+    app.include_router(user_api.router,tags=["users"])
+    app.include_router(permission_api.router,tags=["Permission"])
+
+
+
+    @app.get("/")
+    def health():
+        return {"status": "ok"}
+
+    return app
+
+
+app = create_app()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

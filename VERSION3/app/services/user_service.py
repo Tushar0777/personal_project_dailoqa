@@ -38,31 +38,51 @@ class UserService(BaseService):
     def create_user(self,user_name:str,password:str):
         user_id=str(uuid.uuid4())
         now=datetime.utcnow().isoformat()
-        response1=self.table.put_item(
-            Item={
+        try:
+            response1=self.table.put_item(
+                Item={
+                    "primary_id": f"USERNAME#{user_name}",
+                    "secondary_id": "USER",
+                    "user_id": user_id
+                },
+                ConditionExpression="attribute_not_exists(primary_id)"
+            )
+            response2=self.table.put_item(
+                Item={
+                    "primary_id":f"USER#{user_id}",
+                    "secondary_id":"PROFILE",
+                    "entity_type":"USER",
+                    "username":user_name,
+                    "password":password,
+                    "created_at":now
+                },
+                ReturnConsumedCapacity="TOTAL"
+            )
+
+            response3 = self.table.put_item(
+                Item={
+                    "primary_id": f"USER#{user_id}",
+                    "secondary_id": "ROLE#VIEWER",
+                    "entity_type": "USER_ROLE"
+                },
+                ReturnConsumedCapacity="TOTAL"
+            )
+        except ClientError:
+            self.table.delete_item(
+            Key={
                 "primary_id": f"USERNAME#{user_name}",
-                "secondary_id": "USER",
-                "user_id": user_id
-            },
-            ConditionExpression="attribute_not_exists(primary_id)"
-        )
-        response2=self.table.put_item(
-            Item={
-                "primary_id":f"USER#{user_id}",
-                "secondary_id":"PROFILE",
-                "entity_type":"USER",
-                "username":user_name,
-                "password":password,
-                "created_at":now
-            },
-            ReturnConsumedCapacity="TOTAL"
-        )
+                "secondary_id": "USER"
+            }
+            )
+            raise
         return {
             "user_id": user_id,
             "username": user_name,
+            "role": "VIEWER",
             "capacity": {
                 "username_write": self._extract_capacity(response1),
-                "profile_write": self._extract_capacity(response2)
+                "profile_write": self._extract_capacity(response2),
+                "role_write": self._extract_capacity(response3)
             }
         }
     
