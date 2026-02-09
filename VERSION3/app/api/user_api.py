@@ -3,6 +3,7 @@ from ..services.user_service import UserService
 from ..services.role_service import RoleService
 from ..services.permission_service import PermissionService
 from ..api.deps import require_permission
+from botocore.exceptions import ClientError
 
 router=APIRouter(prefix="/users",tags=['users'])
 
@@ -21,8 +22,30 @@ def create_user(
     username:str=Body(...),
     password:str=Body(...),
     service:UserService=Depends(get_user_service)):
+    try:
+        result=service.create_user(username,password)
+    except ClientError as e:
+        error_code = e.response["Error"]["Code"]
 
-    result=service.create_user(username,password)
+        # Username already exists
+        if error_code == "ConditionalCheckFailedException":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Username already exists"
+            )
+
+        # Any other DynamoDB error
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Database error while creating user"
+        )
+
+    except Exception as e:
+        # Fallback safety net
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Unexpected error occurred"
+        )
 
     return result
 

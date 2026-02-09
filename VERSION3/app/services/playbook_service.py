@@ -191,6 +191,8 @@ class PlaybookService(BaseService):
                 "description":description,
                 "created_by":f"USER#{editor_id}",
                 "created_at":now,
+                "latest_version": 0,
+                "total_versions": 0,
                 "is_deleted":False
             },
             ReturnConsumedCapacity="TOTAL"

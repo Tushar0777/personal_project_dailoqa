@@ -35,17 +35,60 @@ class PlaybookVersionService(BaseService):
             "rcu":self._extract_capacity(response)
         }
     
-    def add_version(self,playbook_id:str,version:int,content:str):
-        now=datetime.utcnow().isoformat()
+    # def add_version(self,playbook_id:str,version:int,content:str):
+    #     now=datetime.utcnow().isoformat()
+    #     try:
+    #         response=self.table.put_item(
+    #             Item={
+    #                 "primary_id":f"PLAYBOOK#{playbook_id}",
+    #                 "secondary_id":f"VERSION#{version}",
+    #                 "entity_type":"PLAYBOOK_VERSION",
+    #                 "version":version,
+    #                 "content":content,
+    #                 "created_at":now
+    #             },
+    #             ConditionExpression="attribute_not_exists(primary_id) AND attribute_not_exists(secondary_id)",
+    #             ReturnConsumedCapacity="TOTAL"
+    #         )
+    #     except ClientError as e:
+    #         if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
+    #             return {"status": "VERSION_ALREADY_EXISTS"}
+    #         raise
+
+    #     return {
+    #         "status": "VERSION_CREATED",
+    #         "playbook_id": playbook_id,
+    #         "version": version,
+    #         "wcu": self._extract_capacity(response)
+    #     }
+    
+    def add_version(self, playbook_id: str, content: str):
+        now = datetime.utcnow().isoformat()
+
+        # 1️⃣ Fetch metadata
+        meta = self.table.get_item(
+            Key={
+                "primary_id": "METADATA",
+                "secondary_id": f"PLAYBOOK#{playbook_id}"
+            }
+        ).get("Item")
+
+        if not meta or meta.get("is_deleted"):
+            return {"status": "PLAYBOOK_NOT_FOUND"}
+
+        latest_version = meta.get("latest_version", 0)
+        new_version = latest_version + 1
+
+        # 2️⃣ Create version item
         try:
-            response=self.table.put_item(
+            response = self.table.put_item(
                 Item={
-                    "primary_id":f"PLAYBOOK#{playbook_id}",
-                    "secondary_id":f"VERSION#{version}",
-                    "entity_type":"PLAYBOOK_VERSION",
-                    "version":version,
-                    "content":content,
-                    "created_at":now
+                    "primary_id": f"PLAYBOOK#{playbook_id}",
+                    "secondary_id": f"VERSION#{new_version}",
+                    "entity_type": "PLAYBOOK_VERSION",
+                    "version": new_version,
+                    "content": content,
+                    "created_at": now
                 },
                 ConditionExpression="attribute_not_exists(primary_id) AND attribute_not_exists(secondary_id)",
                 ReturnConsumedCapacity="TOTAL"
@@ -55,12 +98,73 @@ class PlaybookVersionService(BaseService):
                 return {"status": "VERSION_ALREADY_EXISTS"}
             raise
 
+        # 3️⃣ Atomically update metadata
+        self.table.update_item(
+            Key={
+                "primary_id": "METADATA",
+                "secondary_id": f"PLAYBOOK#{playbook_id}"
+            },
+            UpdateExpression="""
+                SET latest_version = :lv,
+                    total_versions = total_versions + :one,
+                    updated_at = :t
+            """,
+            ExpressionAttributeValues={
+                ":lv": new_version,
+                ":one": 1,
+                ":t": now
+            }
+        )
+
         return {
             "status": "VERSION_CREATED",
             "playbook_id": playbook_id,
-            "version": version,
+            "version": new_version,
             "wcu": self._extract_capacity(response)
         }
+    
+    def get_latest_version(self, playbook_id: str):
+    # 1️⃣ Fetch metadata
+        meta = self.table.get_item(
+            Key={
+                "primary_id": "METADATA",
+                "secondary_id": f"PLAYBOOK#{playbook_id}"
+            },
+            ReturnConsumedCapacity="TOTAL"
+        )
+
+        metadata = meta.get("Item")
+        if not metadata or metadata.get("is_deleted"):
+            return {"status": "PLAYBOOK_NOT_FOUND"}
+
+        latest_version = metadata.get("latest_version", 0)
+
+        if latest_version == 0:
+            return {"status": "NO_VERSIONS"}
+
+        # 2️⃣ Fetch latest version item
+        version = self.table.get_item(
+            Key={
+                "primary_id": f"PLAYBOOK#{playbook_id}",
+                "secondary_id": f"VERSION#{latest_version}"
+            },
+            ReturnConsumedCapacity="TOTAL"
+        )
+
+        item = version.get("Item")
+        if not item or item.get("is_deleted"):
+            return {"status": "LATEST_VERSION_NOT_AVAILABLE"}
+
+        return {
+            "status": "OK",
+            "version": item,
+            "latest_version": latest_version,
+            "rcu": (
+                self._extract_capacity(meta) +
+                self._extract_capacity(version)
+            )
+        }
+
     
     # def soft_delete_version(self, playbook_id: str, version: int):
     #     response = self.table.update_item(

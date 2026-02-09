@@ -9,6 +9,7 @@ import streamlit as st
 from api.user_api import create_user, assign_role, list_users
 from api.playbook_api import create_playbook, list_playbooks, delete_playbook
 from api.version_api import create_version, list_versions
+from components.viewer import viewer_dashboard
 
 def show_success(message):
     st.success(f"✅ {message}")
@@ -42,13 +43,15 @@ def admin_dashboard():
     # ---------- PLAYBOOKS ----------
     with st.expander("Playbooks"):
         name = st.text_input("Playbook Name", key="pb_name")
+        title = st.text_input("Title", key="pb_title")
+        description = st.text_area("Description", key="pb_desc", height=100)
 
         if st.button("Create Playbook", key="pb_create"):
             if not name:
                 st.error("Playbook name required")
             else:
                 try:
-                    create_playbook(token, name)
+                    create_playbook(token, name,title,description)
                     show_success(f"Playbook `{name}` created")
                     st.rerun()
                 except Exception as e:
@@ -59,7 +62,12 @@ def admin_dashboard():
         if playbooks:
             for p in playbooks:
                 col1, col2 = st.columns([4, 1])
-                col1.write(p["name"])
+                # col1.write(p["name"])
+                col1.write(
+                    f"{p['name']}  "
+                    f"(latest: {p.get('latest_version', 0)}, "
+                    f"total: {p.get('total_versions', 0)})"
+                )
 
                 if col2.button("Delete", key=f"del_{p['name']}"):
                     delete_playbook(token, p["name"])
@@ -70,47 +78,105 @@ def admin_dashboard():
 
     # ---------- VERSIONS ----------
 
+    # with st.expander("Versions"):
+    #     playbooks = list_playbooks(token)
+
+    #     if not playbooks:
+    #         st.warning("Create a playbook first")
+    #         return
+
+    #     # pb_name = st.selectbox(
+    #     #     "Select Playbook",
+    #     #     [p["name"] for p in playbooks],
+    #     #     key="ver_pb"
+    #     # )
+    #     pb_map = {pb["name"]: pb for pb in playbooks}
+    #     pb_name = st.selectbox(
+    #         "Select Playbook",
+    #         list(pb_map.keys()),
+    #         index=None,
+    #         placeholder="Choose playbook"
+    #     )
+
+    #     if not pb_name:
+    #         st.info("Select a playbook to create version")
+    #         return
+    #     selected_pb = pb_map[pb_name]
+    #     st.markdown(
+    #         f"""
+    #         **Latest Version:** `{selected_pb.get("latest_version", 0)}`
+            
+    #         **Total Versions:** `{selected_pb.get("total_versions", 0)}`
+    #         """
+    #     )
+    #     content = st.text_area("Version Content", key="ver_content")
+
+    #     if st.button("Create Version", key="ver_create"):
+    #         if not content:
+    #             st.error("Version content required")
+    #         else:
+    #             try:
+    #                 create_version(token, pb_name, content)
+    #                 show_success(f"New version added to `{pb_name}`")
+    #             except Exception as e:
+    #                 st.error(e)
+
+        # if st.button("List Versions", key="ver_list"):
+        #     try:
+        #         versions = list_versions(token, pb_name)
+        #         st.subheader("Versions")
+        #         st.json(versions)
+        #     except Exception as e:
+        #         st.error(e)
+
+        # ye abhi abhi admin change jab total_version changes kare the tab change kara hai 
+        # if playbooks:
+        #     pb_name = st.selectbox(
+        #         "Select Playbook",
+        #         [p["name"] for p in playbooks],
+        #         key="ver_playbook"
+        #     )
+
     with st.expander("Versions"):
         playbooks = list_playbooks(token)
 
         if not playbooks:
             st.warning("Create a playbook first")
-            return
+        else:
+            pb_map = {pb["name"]: pb for pb in playbooks}
 
-        pb_name = st.selectbox(
-            "Select Playbook",
-            [p["name"] for p in playbooks],
-            key="ver_pb"
-        )
-
-        content = st.text_area("Version Content", key="ver_content")
-
-        if st.button("Create Version", key="ver_create"):
-            if not content:
-                st.error("Version content required")
-            else:
-                try:
-                    create_version(token, pb_name, content)
-                    show_success(f"New version added to `{pb_name}`")
-                except Exception as e:
-                    st.error(e)
-
-        if st.button("List Versions", key="ver_list"):
-            try:
-                versions = list_versions(token, pb_name)
-                st.subheader("Versions")
-                st.json(versions)
-            except Exception as e:
-                st.error(e)
-
-
-        if playbooks:
             pb_name = st.selectbox(
                 "Select Playbook",
-                [p["name"] for p in playbooks],
-                key="ver_playbook"
+                list(pb_map.keys()),
+                index=None,
+                placeholder="Choose playbook"
             )
 
+            if pb_name:
+                selected_pb = pb_map[pb_name]
+
+                st.markdown(
+                    f"""
+                    **Latest Version:** `{selected_pb.get("latest_version", 0)}`
+                    
+                    **Total Versions:** `{selected_pb.get("total_versions", 0)}`
+                    """
+                )
+
+                content = st.text_area("Version Content", key="ver_content")
+
+                if st.button("Create Version", key="ver_create"):
+                    if not content.strip():
+                        st.error("Version content required")
+                    else:
+                        try:
+                            create_version(token, pb_name, content)
+                            show_success(f"New version added to `{pb_name}`")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(e)
+            else:
+                st.info("Select a playbook to create version")
 
     
     # ---------- ASSIGN ROLE ----------
@@ -152,6 +218,11 @@ def admin_dashboard():
 
             except Exception as e:
                 st.error(f"❌ {e}")
+
+
+    with st.expander("View Playbooks (Read Only)"):
+            viewer_dashboard()
+        
 
 
 

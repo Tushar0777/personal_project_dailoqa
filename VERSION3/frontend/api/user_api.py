@@ -3,7 +3,7 @@ from api.client import api_request
 def create_user(token, username, password):
     return api_request(
         "POST",
-        "/users",
+        "/users/",
         token=token,
         json={"username": username, "password": password}
     )
